@@ -4,6 +4,9 @@ const CONFIG_DEFAULTS = {
   searchWindowHours: 24,
   minBudgetRub: 0,
   maxBudgetRub: 0,
+  buyerHistoryFilterMode: 'mark',
+  minBuyerProjects: 10,
+  minBuyerHiredPercent: 35,
   requiredKeywords: '',
   excludedKeywords: '',
   telegramParseMode: 'HTML',
@@ -85,6 +88,9 @@ function setDefaultConfig() {
     SEARCH_WINDOW_HOURS: CONFIG_DEFAULTS.searchWindowHours,
     MIN_BUDGET_RUB: CONFIG_DEFAULTS.minBudgetRub,
     MAX_BUDGET_RUB: CONFIG_DEFAULTS.maxBudgetRub,
+    BUYER_HISTORY_FILTER_MODE: CONFIG_DEFAULTS.buyerHistoryFilterMode,
+    MIN_BUYER_PROJECTS: CONFIG_DEFAULTS.minBuyerProjects,
+    MIN_BUYER_HIRED_PERCENT: CONFIG_DEFAULTS.minBuyerHiredPercent,
     REQUIRED_KEYWORDS: CONFIG_DEFAULTS.requiredKeywords,
     EXCLUDED_KEYWORDS: CONFIG_DEFAULTS.excludedKeywords,
     TELEGRAM_PARSE_MODE: CONFIG_DEFAULTS.telegramParseMode,
@@ -164,6 +170,9 @@ function getConfig_() {
     searchWindowHours: Number(properties.getProperty('SEARCH_WINDOW_HOURS') || CONFIG_DEFAULTS.searchWindowHours),
     minBudgetRub: Number(properties.getProperty('MIN_BUDGET_RUB') || CONFIG_DEFAULTS.minBudgetRub),
     maxBudgetRub: Number(properties.getProperty('MAX_BUDGET_RUB') || CONFIG_DEFAULTS.maxBudgetRub),
+    buyerHistoryFilterMode: normalizeBuyerHistoryFilterMode_(properties.getProperty('BUYER_HISTORY_FILTER_MODE') || CONFIG_DEFAULTS.buyerHistoryFilterMode),
+    minBuyerProjects: Number(properties.getProperty('MIN_BUYER_PROJECTS') || CONFIG_DEFAULTS.minBuyerProjects),
+    minBuyerHiredPercent: Number(properties.getProperty('MIN_BUYER_HIRED_PERCENT') || CONFIG_DEFAULTS.minBuyerHiredPercent),
     requiredKeywords: splitKeywords_(properties.getProperty('REQUIRED_KEYWORDS') || CONFIG_DEFAULTS.requiredKeywords),
     excludedKeywords: splitKeywords_(properties.getProperty('EXCLUDED_KEYWORDS') || CONFIG_DEFAULTS.excludedKeywords),
     telegramBotToken: properties.getProperty('TELEGRAM_BOT_TOKEN') || '',
@@ -217,6 +226,8 @@ function parseProjectRow_(rowHtml, messageDate) {
   const buyerName = cleanText_(extractFirstBuyerName_(cells[1]));
   const buyerLevel = extractBuyerLevelValue_(cells[1]);
   const buyerStats = extractBuyerStats_(cells[1]);
+  const buyerProjectsCount = extractBuyerProjectsCount_(buyerStats.projectsText);
+  const buyerHiredPercent = extractBuyerHiredPercent_(buyerStats.hiredText);
   const budgetText = cleanText_(stripTags_(cells[2]));
   const budgetRub = extractBudgetRub_(budgetText);
 
@@ -239,6 +250,8 @@ function parseProjectRow_(rowHtml, messageDate) {
     buyerUrl: buyerLink,
     buyerProjectsText: buyerStats.projectsText,
     buyerHiredText: buyerStats.hiredText,
+    buyerProjectsCount: buyerProjectsCount,
+    buyerHiredPercent: buyerHiredPercent,
     budgetText: budgetText,
     budgetRub: budgetRub,
     date: messageDate,
@@ -289,7 +302,7 @@ function extractBuyerLevelValue_(html) {
 function extractBuyerStats_(html) {
   const text = cleanText_(html);
   const projectsMatch = text.match(/(\d+)\s+(?:проект(?:ов|а)?\s+на\s+бирже|projects?\s+on\s+market)/i);
-  const hiredMatch = text.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:нанят|hired)/i);
+  const hiredMatch = text.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:наня|нанят|hired)/i);
 
   if (projectsMatch || hiredMatch) {
     return {
@@ -316,6 +329,60 @@ function extractBuyerStats_(html) {
     projectsText: projectsText,
     hiredText: hiredText
   };
+}
+
+function extractBuyerProjectsCount_(text) {
+  const match = cleanText_(text).match(/\d+/);
+  return match ? Number(match[0]) : null;
+}
+
+function extractBuyerHiredPercent_(text) {
+  const match = cleanText_(text).match(/\d+(?:[.,]\d+)?\s*%/);
+  return match ? Number(match[0].replace('%', '').replace(',', '.').replace(/\s+/g, '')) : null;
+}
+
+function normalizeBuyerHistoryFilterMode_(mode) {
+  const normalized = String(mode || '').toLowerCase().trim();
+  return ['off', 'mark', 'strict'].indexOf(normalized) !== -1 ? normalized : CONFIG_DEFAULTS.buyerHistoryFilterMode;
+}
+
+function evaluateBuyerHistory_(project, config) {
+  const mode = normalizeBuyerHistoryFilterMode_(config.buyerHistoryFilterMode || CONFIG_DEFAULTS.buyerHistoryFilterMode);
+  if (mode === 'off') {
+    return {
+      passes: true,
+      warning: ''
+    };
+  }
+
+  const minProjects = Number(config.minBuyerProjects || 0);
+  const minHiredPercent = Number(config.minBuyerHiredPercent || 0);
+  const hasProjects = project.buyerProjectsCount !== null && project.buyerProjectsCount !== undefined && !isNaN(project.buyerProjectsCount);
+  const hasHired = project.buyerHiredPercent !== null && project.buyerHiredPercent !== undefined && !isNaN(project.buyerHiredPercent);
+
+  if (!hasProjects && !hasHired) {
+    return {
+      passes: false,
+      warning: '⚠ история заказчика не распознана'
+    };
+  }
+
+  const reasons = [];
+  if (minProjects > 0 && hasProjects && project.buyerProjectsCount < minProjects) {
+    reasons.push('проектов ' + project.buyerProjectsCount + ' < ' + minProjects);
+  }
+  if (minHiredPercent > 0 && hasHired && project.buyerHiredPercent < minHiredPercent) {
+    reasons.push('нанял ' + formatPercentForWarning_(project.buyerHiredPercent) + ' < ' + formatPercentForWarning_(minHiredPercent));
+  }
+
+  return {
+    passes: reasons.length === 0,
+    warning: reasons.length > 0 ? '⚠ ниже порога: ' + reasons.join(', ') : ''
+  };
+}
+
+function formatPercentForWarning_(value) {
+  return String(value).replace('.', ',') + '%';
 }
 
 function matchesFilters_(project, config) {
@@ -352,6 +419,15 @@ function matchesFilters_(project, config) {
     return false;
   }
 
+  const buyerHistory = evaluateBuyerHistory_(project, config);
+  if (!buyerHistory.passes) {
+    if (normalizeBuyerHistoryFilterMode_(config.buyerHistoryFilterMode) === 'strict') {
+      console.log('project:skip_buyer_history title=%s warning=%s', project.title, buyerHistory.warning || '');
+      return false;
+    }
+    console.log('project:mark_buyer_history title=%s warning=%s', project.title, buyerHistory.warning || '');
+  }
+
   console.log('project:match title=%s budget=%s buyer=%s', project.title, project.budgetRub, project.buyerName);
   return true;
 }
@@ -364,7 +440,7 @@ function sendTelegramDigest_(projects, message, config) {
   ].join('\n');
   const separator = '\n\n---\n\n';
   const cards = projects.map(function(project) {
-    return formatProjectCard_(project);
+    return formatProjectCard_(project, config);
   });
   const digest = header + separator + cards.join(separator);
 
@@ -376,7 +452,7 @@ function sendTelegramDigest_(projects, message, config) {
   console.log('telegram:digest_done messageId=%s', message.getId());
 }
 
-function formatProjectCard_(project) {
+function formatProjectCard_(project, config) {
   const budget = formatBudget_(project);
   const title = project.title || 'Без названия';
   const lines = ['<b>' + escapeHtml_(budget + ' | ' + title) + '</b>'];
@@ -402,6 +478,13 @@ function formatProjectCard_(project) {
   }
   if (historyParts.length > 0) {
     lines.push('<b>История:</b> ' + escapeHtml_(historyParts.join(' | ')));
+  }
+
+  if (config) {
+    const buyerHistory = evaluateBuyerHistory_(project, config);
+    if (buyerHistory.warning) {
+      lines.push(escapeHtml_(buyerHistory.warning));
+    }
   }
 
   if (project.url) {
