@@ -4,7 +4,7 @@ const CONFIG_DEFAULTS = {
   searchWindowHours: 24,
   minBudgetRub: 0,
   maxBudgetRub: 0,
-  buyerHistoryFilterMode: 'mark',
+  buyerHistoryFilterMode: 'strict',
   minBuyerProjects: 10,
   minBuyerHiredPercent: 35,
   requiredKeywords: '',
