@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Единственная зависимость: devDependency @google/clasp.
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "dev"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
